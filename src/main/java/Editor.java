@@ -6,6 +6,8 @@ import java.awt.event.*;
 import java.io.*;
 import java.nio.file.*;
 import java.util.*;
+import java.util.List;
+import java.util.concurrent.CountDownLatch;
 import java.util.regex.*;
 
 public class Editor extends JFrame {
@@ -16,7 +18,7 @@ public class Editor extends JFrame {
     private final JTextArea code   = new JTextArea();
     private final JTextArea output = new JTextArea();
     private final JLabel    status = new JLabel(" Ready");
-    private final JButton   runBtn = new JButton("\u25b6 Run");
+    private final JButton   runBtn = new JButton("▶ Run");
     private Path    file;
     private boolean dirty;
 
@@ -64,7 +66,7 @@ public class Editor extends JFrame {
         JToolBar bar = new JToolBar();
         bar.setFloatable(false);
         bar.add(btn("New",   e -> { if (confirmDiscard()) newFile(); }));
-        bar.add(btn("Open\u2026", e -> { if (confirmDiscard()) chooseOpen(); }));
+        bar.add(btn("Open…", e -> { if (confirmDiscard()) chooseOpen(); }));
         bar.add(btn("Save",  e -> save()));
         bar.addSeparator();
         runBtn.setFont(runBtn.getFont().deriveFont(Font.BOLD));
@@ -101,7 +103,7 @@ public class Editor extends JFrame {
     void doRun() {
         String currentText = code.getText();
         output.setText("");
-        setStatus("Compiling\u2026");
+        setStatus("Compiling…");
         runBtn.setEnabled(false);
 
         Thread.ofVirtual().start(() -> {
@@ -113,9 +115,21 @@ public class Editor extends JFrame {
                 Files.writeString(src, currentText);
 
                 tmpOut = Files.createTempDirectory("jedit-");
-                String main = Fixer.compile(src, tmpOut, "", this::appendOut);
+                String main = Fixer.compile(src, tmpOut, "", this::importDialog, this::appendOut);
+
+                String updated = Files.readString(src);
+                if (!updated.equals(currentText)) {
+                    final String u = updated;
+                    SwingUtilities.invokeLater(() -> {
+                        int pos = code.getCaretPosition();
+                        code.setText(u);
+                        code.setCaretPosition(Math.min(pos, u.length()));
+                        dirty = true; updateTitle();
+                    });
+                }
+
                 if (main == null) { setStatus("Compile failed."); return; }
-                setStatus("Running " + main + "\u2026");
+                setStatus("Running " + main + "…");
 
                 Process proc = new ProcessBuilder(JAVA, "-cp", tmpOut.toString(), main)
                         .redirectErrorStream(true).start();
@@ -137,6 +151,25 @@ public class Editor extends JFrame {
                 SwingUtilities.invokeLater(() -> runBtn.setEnabled(true));
             }
         });
+    }
+
+    String importDialog(String name, List<String> cands) throws Exception {
+        if (cands.isEmpty()) { appendOut("No import found for '" + name + "'\n"); return null; }
+        if (cands.size() == 1) { appendOut("+ import " + cands.get(0) + "\n"); return cands.get(0); }
+        var latch = new CountDownLatch(1);
+        var pick  = new String[1];
+        SwingUtilities.invokeLater(() -> {
+            var list = new JList<>(cands.toArray(new String[0]));
+            list.setSelectedIndex(0);
+            list.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
+            int res = JOptionPane.showConfirmDialog(this,
+                    new Object[]{"Multiple imports for '" + name + "'. Choose one:", new JScrollPane(list)},
+                    "Choose Import", JOptionPane.OK_CANCEL_OPTION);
+            if (res == JOptionPane.OK_OPTION) pick[0] = list.getSelectedValue();
+            latch.countDown();
+        });
+        latch.await();
+        return pick[0];
     }
 
     void newFile() {
@@ -193,7 +226,7 @@ public class Editor extends JFrame {
     void markDirty() { dirty = true; updateTitle(); }
 
     void updateTitle() {
-        String t = "jrun \u2014 " + (file != null ? file.getFileName() : "Untitled") + (dirty ? " \u25cf" : "");
+        String t = "jrun — " + (file != null ? file.getFileName() : "Untitled") + (dirty ? " ●" : "");
         SwingUtilities.invokeLater(() -> setTitle(t));
     }
 

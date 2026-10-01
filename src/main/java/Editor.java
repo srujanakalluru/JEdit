@@ -4,6 +4,7 @@ import javax.swing.filechooser.*;
 import javax.swing.text.BadLocationException;
 import javax.swing.text.DefaultHighlighter;
 import javax.swing.text.Highlighter;
+import javax.swing.undo.*;
 import java.awt.*;
 import java.awt.event.*;
 import java.io.*;
@@ -22,7 +23,8 @@ public class Editor extends JFrame {
     private final JTextArea code   = new JTextArea();
     private final JTextArea output = new JTextArea();
     private final JLabel    status = new JLabel(" Ready");
-    private final JButton   runBtn = new JButton("▶ Run");
+    private final JButton       runBtn = new JButton("▶ Run");
+    private final UndoManager   undo   = new UndoManager();
     private Path    file;
     private boolean dirty;
 
@@ -64,6 +66,7 @@ public class Editor extends JFrame {
     void buildUI() {
         code.setFont(new Font(Font.MONOSPACED, Font.PLAIN, 14));
         code.setTabSize(4);
+        code.getDocument().addUndoableEditListener(undo);
         code.getDocument().addDocumentListener(new DocumentListener() {
             public void insertUpdate(DocumentEvent e) { markDirty(); scheduleImportCheck(); }
             public void removeUpdate(DocumentEvent e) { markDirty(); scheduleImportCheck(); }
@@ -106,6 +109,8 @@ public class Editor extends JFrame {
         int mod = Toolkit.getDefaultToolkit().getMenuShortcutKeyMaskEx();
         bind(KeyEvent.VK_S, mod, e -> save());
         bind(KeyEvent.VK_R, mod, e -> doRun());
+        bind(KeyEvent.VK_Z, mod, e -> { if (undo.canUndo()) undo.undo(); });
+        bind(KeyEvent.VK_Z, mod | KeyEvent.SHIFT_DOWN_MASK, e -> { if (undo.canRedo()) undo.redo(); });
     }
 
     void bind(int key, int mod, ActionListener a) {
@@ -324,6 +329,7 @@ public class Editor extends JFrame {
         file = null; dirty = false;
         code.setText("public class Main {\n    public static void main(String[] args) {\n        System.out.println(\"Hello!\");\n    }\n}\n");
         code.setCaretPosition(0);
+        undo.discardAllEdits();
         updateTitle();
     }
 
@@ -338,6 +344,7 @@ public class Editor extends JFrame {
         try {
             code.setText(Files.readString(p));
             code.setCaretPosition(0);
+            undo.discardAllEdits();
             file = p; dirty = false; updateTitle();
         } catch (IOException ex) { showErr("Cannot open: " + ex.getMessage()); }
     }

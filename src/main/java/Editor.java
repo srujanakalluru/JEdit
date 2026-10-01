@@ -411,10 +411,12 @@ public class Editor extends JFrame {
 
         ensureMaven();
         appendOut("Resolving dependencies…\n");
-        Process mvn = new ProcessBuilder(MVN, "-q", "-B", "-f",
+        ProcessBuilder pb = new ProcessBuilder(MVN, "-q", "-B", "-f",
                 cdir.resolve("pom.xml").toString(),
                 "dependency:build-classpath", "-Dmdep.outputFile=" + cpf)
-                .redirectErrorStream(true).start();
+                .redirectErrorStream(true);
+        pb.environment().put("JAVA_HOME", System.getProperty("java.home"));
+        Process mvn = pb.start();
         try (var br = new BufferedReader(new InputStreamReader(mvn.getInputStream()))) {
             br.lines().forEach(l -> appendOut(l + "\n"));
         }

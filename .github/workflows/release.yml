@@ -1,0 +1,51 @@
+name: Release DMG
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Read version
+        id: ver
+        run: |
+          V=$(mvn help:evaluate -Dexpression=project.version -q -DforceStdout)
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+
+      - name: Build DMG
+        run: |
+          chmod +x build-dmg.sh
+          VERSION=${{ steps.ver.outputs.version }} bash build-dmg.sh
+
+      - name: Upload DMG artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: JEdit-dmg
+          path: target/jpackage-out/*.dmg
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.ver.outputs.version }}
+          name: JEdit v${{ steps.ver.outputs.version }}
+          draft: false
+          prerelease: false
+          files: target/jpackage-out/*.dmg
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

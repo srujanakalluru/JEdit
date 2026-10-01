@@ -1,9 +1,11 @@
 import javax.swing.*;
 import javax.swing.event.*;
 import javax.swing.filechooser.*;
+import javax.swing.plaf.basic.BasicSplitPaneDivider;
+import javax.swing.plaf.basic.BasicSplitPaneUI;
 import javax.swing.text.BadLocationException;
-import javax.swing.text.DefaultHighlighter;
 import javax.swing.text.Highlighter;
+import javax.swing.text.JTextComponent;
 import javax.swing.undo.*;
 import java.awt.*;
 import java.awt.event.*;
@@ -19,25 +21,51 @@ public class Editor extends JFrame {
             System.getProperty("user.home") + "/.jrun");
     static final String MVN  = JRUN_HOME + "/maven/bin/mvn";
     static final String JAVA = Path.of(System.getProperty("java.home"), "bin", "java").toString();
+    static final boolean MAC = System.getProperty("os.name").startsWith("Mac");
 
-    private final JTextArea code   = new JTextArea();
+    static final Color CANVAS       = Color.WHITE;
+    static final Color CHROME       = new Color(0xF5F5F7);
+    static final Color CONSOLE      = new Color(0xFBFBFD);
+    static final Color HAIRLINE     = new Color(0xD2D2D7);
+    static final Color LABEL        = new Color(0x1D1D1F);
+    static final Color SECONDARY    = new Color(0x86868B);
+    static final Color TERTIARY     = new Color(0xB8B8BD);
+    static final Color ACCENT       = new Color(0x007AFF);
+    static final Color SELECTION    = new Color(0xB3D7FF);
+    static final Color CURRENT_LINE = new Color(0xF4F7FB);
+    static final Color ERROR        = new Color(0xFF3B30);
+    static final String MONO = Arrays.asList(GraphicsEnvironment.getLocalGraphicsEnvironment()
+            .getAvailableFontFamilyNames()).contains("SF Mono") ? "SF Mono" : MAC ? "Menlo" : Font.MONOSPACED;
+
+    private final JTextArea code = new JTextArea() {
+        @Override protected void paintComponent(Graphics g) {
+            g.setColor(getBackground());
+            g.fillRect(0, 0, getWidth(), getHeight());
+            try {
+                var line = modelToView2D(getCaretPosition());
+                g.setColor(CURRENT_LINE);
+                g.fillRect(0, (int) line.getY(), getWidth(), (int) line.getHeight());
+            } catch (BadLocationException ignored) {}
+            super.paintComponent(g);
+        }
+    };
     private final JTextArea output = new JTextArea();
-    private final JLabel    status = new JLabel(" Ready");
-    private final JButton       runBtn = new JButton("▶ Run");
+    private final JLabel    status = new JLabel("Ready");
+    private final JButton       runBtn = new ToolButton("▶  Run", true, e -> doRun());
     private final UndoManager   undo   = new UndoManager();
     private Path    file;
     private boolean dirty;
 
     private final Imports imports = new Imports();
     private final javax.swing.Timer importTimer = new javax.swing.Timer(400, e -> checkImports());
-    private final Highlighter.HighlightPainter unresolvedPaint =
-            new DefaultHighlighter.DefaultHighlightPainter(new Color(255, 214, 214));
+    private final Highlighter.HighlightPainter unresolvedPaint = Editor::paintSquiggle;
     private final List<Object> unresolvedTags = new ArrayList<>();
     private List<Imports.Ref> refs = List.of();
     private Popup hint;
 
     public static void main(String[] args) {
-        System.setProperty("apple.awt.application.name", "jrun");
+        System.setProperty("apple.awt.application.name", "JEdit");
+        System.setProperty("apple.awt.application.appearance", "NSAppearanceNameAqua");
         Path p = args.length > 0 ? Path.of(args[0]) : null;
         SwingUtilities.invokeLater(() -> {
             try { UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName()); }
@@ -47,7 +75,9 @@ public class Editor extends JFrame {
     }
 
     Editor(Path p) {
-        super("jrun");
+        super("JEdit");
+        getRootPane().putClientProperty("apple.awt.fullWindowContent", true);
+        getRootPane().putClientProperty("apple.awt.transparentTitleBar", true);
         setDefaultCloseOperation(DO_NOTHING_ON_CLOSE);
         addWindowListener(new WindowAdapter() {
             public void windowClosing(WindowEvent e) { maybeQuit(); }
@@ -67,13 +97,22 @@ public class Editor extends JFrame {
         } else {
             newFile();
         }
-        setSize(940, 700);
+        setSize(980, 720);
+        setMinimumSize(new Dimension(640, 420));
         setLocationRelativeTo(null);
     }
 
     void buildUI() {
-        code.setFont(new Font(Font.MONOSPACED, Font.PLAIN, 14));
+        code.setFont(new Font(MONO, Font.PLAIN, 13));
         code.setTabSize(4);
+        code.setOpaque(false);
+        code.setBackground(CANVAS);
+        code.setForeground(LABEL);
+        code.setCaretColor(LABEL);
+        code.setSelectionColor(SELECTION);
+        code.setSelectedTextColor(LABEL);
+        code.setMargin(new Insets(12, 6, 12, 16));
+        code.addCaretListener(e -> code.repaint());
         code.getDocument().addUndoableEditListener(undo);
         code.getDocument().addDocumentListener(new DocumentListener() {
             public void insertUpdate(DocumentEvent e) { markDirty(); scheduleImportCheck(); }
@@ -89,27 +128,50 @@ public class Editor extends JFrame {
             public void actionPerformed(ActionEvent e) { showImportPopup(); }
         });
 
-        output.setFont(new Font(Font.MONOSPACED, Font.PLAIN, 12));
+        output.setFont(new Font(MONO, Font.PLAIN, 12));
         output.setEditable(false);
-        output.setBackground(new Color(40, 44, 52));
-        output.setForeground(new Color(171, 178, 191));
-        output.setCaretColor(new Color(171, 178, 191));
+        output.setBackground(CONSOLE);
+        output.setForeground(LABEL);
+        output.setCaretColor(CONSOLE);
+        output.setSelectionColor(SELECTION);
+        output.setMargin(new Insets(10, 16, 10, 16));
 
-        JSplitPane split = new JSplitPane(JSplitPane.VERTICAL_SPLIT,
-                new JScrollPane(code), new JScrollPane(output));
+        JScrollPane codeScroll = flat(new JScrollPane(code));
+        codeScroll.setRowHeaderView(new Gutter());
+        JSplitPane split = new JSplitPane(JSplitPane.VERTICAL_SPLIT, codeScroll, flat(new JScrollPane(output)));
         split.setResizeWeight(0.72);
+        split.setBorder(null);
+        split.setDividerSize(1);
+        split.setUI(new BasicSplitPaneUI() {
+            @Override public BasicSplitPaneDivider createDefaultDivider() {
+                return new BasicSplitPaneDivider(this) {
+                    @Override public void paint(Graphics g) { g.setColor(HAIRLINE); g.fillRect(0, 0, getWidth(), getHeight()); }
+                };
+            }
+        });
 
-        JToolBar bar = new JToolBar();
-        bar.setFloatable(false);
-        bar.add(btn("New",   e -> { if (confirmDiscard()) newFile(); }));
-        bar.add(btn("Open…", e -> { if (confirmDiscard()) chooseOpen(); }));
-        bar.add(btn("Save",  e -> save()));
-        bar.addSeparator();
-        runBtn.setFont(runBtn.getFont().deriveFont(Font.BOLD));
-        runBtn.addActionListener(e -> doRun());
-        bar.add(runBtn);
+        JPanel left = new JPanel(new FlowLayout(FlowLayout.LEFT, 2, 0));
+        left.setOpaque(false);
+        left.add(tool("New", null, e -> { if (confirmDiscard()) newFile(); }));
+        left.add(tool("Open…", null, e -> { if (confirmDiscard()) chooseOpen(); }));
+        left.add(tool("Save", "⌘S", e -> save()));
+        runBtn.setToolTipText("Run  ⌘R");
 
-        status.setBorder(BorderFactory.createEmptyBorder(2, 6, 2, 0));
+        JPanel bar = new JPanel(new BorderLayout());
+        bar.setBackground(CHROME);
+        bar.setBorder(BorderFactory.createCompoundBorder(
+                BorderFactory.createMatteBorder(0, 0, 1, 0, HAIRLINE),
+                BorderFactory.createEmptyBorder(MAC ? 11 : 8, MAC ? 78 : 10, 9, 12)));
+        bar.add(left, BorderLayout.WEST);
+        bar.add(runBtn, BorderLayout.EAST);
+
+        status.setFont(status.getFont().deriveFont(11f));
+        status.setForeground(SECONDARY);
+        status.setOpaque(true);
+        status.setBackground(CHROME);
+        status.setBorder(BorderFactory.createCompoundBorder(
+                BorderFactory.createMatteBorder(1, 0, 0, 0, HAIRLINE),
+                BorderFactory.createEmptyBorder(4, 12, 4, 12)));
         add(bar,    BorderLayout.NORTH);
         add(split,  BorderLayout.CENTER);
         add(status, BorderLayout.SOUTH);
@@ -129,8 +191,105 @@ public class Editor extends JFrame {
                 KeyStroke.getKeyStroke(key, mod), JComponent.WHEN_IN_FOCUSED_WINDOW);
     }
 
-    JButton btn(String label, ActionListener a) {
-        JButton b = new JButton(label); b.addActionListener(a); return b;
+    JButton tool(String label, String shortcut, ActionListener a) {
+        JButton b = new ToolButton(label, false, a);
+        if (shortcut != null) b.setToolTipText(label + "  " + shortcut);
+        return b;
+    }
+
+    static JScrollPane flat(JScrollPane sp) {
+        sp.setBorder(BorderFactory.createEmptyBorder());
+        sp.setViewportBorder(null);
+        sp.getViewport().setBackground(sp.getViewport().getView().getBackground());
+        return sp;
+    }
+
+    static void paintSquiggle(Graphics g, int p0, int p1, Shape bounds, JTextComponent c) {
+        try {
+            var a = c.modelToView2D(p0);
+            var b = c.modelToView2D(p1);
+            int y = (int) a.getMaxY() - 2;
+            Graphics2D g2 = (Graphics2D) g.create();
+            g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+            g2.setColor(ERROR);
+            for (int x = (int) a.getX(); x < (int) b.getX(); x += 4) {
+                g2.drawLine(x, y, x + 2, y - 2);
+                g2.drawLine(x + 2, y - 2, x + 4, y);
+            }
+            g2.dispose();
+        } catch (BadLocationException ignored) {}
+    }
+
+    static final class ToolButton extends JButton {
+        private final boolean primary;
+
+        ToolButton(String label, boolean primary, ActionListener a) {
+            super(label);
+            this.primary = primary;
+            addActionListener(a);
+            setContentAreaFilled(false);
+            setBorderPainted(false);
+            setFocusPainted(false);
+            setOpaque(false);
+            setRolloverEnabled(true);
+            setForeground(primary ? Color.WHITE : LABEL);
+            setFont(getFont().deriveFont(primary ? Font.BOLD : Font.PLAIN, 13f));
+            setBorder(BorderFactory.createEmptyBorder(5, primary ? 14 : 10, 5, primary ? 14 : 10));
+        }
+
+        @Override protected void paintComponent(Graphics g) {
+            ButtonModel m = getModel();
+            Color fill = primary
+                    ? !isEnabled() ? new Color(0x99C7FF) : m.isPressed() ? new Color(0x0062CC) : m.isRollover() ? new Color(0x0A84FF) : ACCENT
+                    : m.isPressed() ? new Color(0xDCDCE1) : m.isRollover() ? new Color(0xE8E8ED) : null;
+            if (fill != null) {
+                Graphics2D g2 = (Graphics2D) g.create();
+                g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+                g2.setColor(fill);
+                g2.fillRoundRect(0, 0, getWidth(), getHeight(), 8, 8);
+                g2.dispose();
+            }
+            super.paintComponent(g);
+        }
+    }
+
+    final class Gutter extends JComponent {
+        Gutter() {
+            setFont(new Font(MONO, Font.PLAIN, 11));
+            code.getDocument().addDocumentListener(new DocumentListener() {
+                public void insertUpdate(DocumentEvent e) { revalidate(); repaint(); }
+                public void removeUpdate(DocumentEvent e) { revalidate(); repaint(); }
+                public void changedUpdate(DocumentEvent e) {}
+            });
+            code.addCaretListener(e -> repaint());
+        }
+
+        @Override public Dimension getPreferredSize() {
+            int digits = Math.max(3, String.valueOf(code.getLineCount()).length());
+            return new Dimension(getFontMetrics(getFont()).charWidth('0') * digits + 22, code.getPreferredSize().height);
+        }
+
+        @Override protected void paintComponent(Graphics g) {
+            Rectangle clip = g.getClipBounds();
+            Graphics2D g2 = (Graphics2D) g;
+            g2.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
+            g2.setColor(CANVAS);
+            g2.fill(clip);
+            g2.setFont(getFont());
+            FontMetrics fm = g2.getFontMetrics();
+            int ascent = code.getFontMetrics(code.getFont()).getAscent();
+            try {
+                int caretLine = code.getLineOfOffset(code.getCaretPosition());
+                int first = code.getLineOfOffset(code.viewToModel2D(new Point(0, clip.y)));
+                int last  = code.getLineOfOffset(code.viewToModel2D(new Point(0, clip.y + clip.height)));
+                for (int i = first; i <= last; i++) {
+                    var line = code.modelToView2D(code.getLineStartOffset(i));
+                    String n = String.valueOf(i + 1);
+                    g2.setColor(i == caretLine ? SECONDARY : TERTIARY);
+                    g2.drawString(n, getWidth() - 12 - fm.stringWidth(n), (int) line.getY() + ascent);
+                }
+            } catch (BadLocationException ignored) {}
+        }
     }
 
     static String extractClassName(String src) {
@@ -284,17 +443,20 @@ public class Editor extends JFrame {
     void showHint(Imports.Ref r) {
         if (!code.isShowing()) return;
         List<String> shown = r.cands().subList(0, Math.min(3, r.cands().size()));
-        String text = String.join("  |  ", shown) + (r.cands().size() > 3 ? "  |  …" : "") + "    ⌥↵";
+        String text = "<html>" + String.join("<span style='color:#B8B8BD'>&nbsp;&nbsp;|&nbsp;&nbsp;</span>", shown)
+                + (r.cands().size() > 3 ? "<span style='color:#86868B'>&nbsp;&nbsp;+" + (r.cands().size() - 3) + "</span>" : "")
+                + "<span style='color:#86868B'>&nbsp;&nbsp;&nbsp;&nbsp;⌥↵ import</span></html>";
         JLabel label = new JLabel(text);
-        label.setFont(code.getFont().deriveFont(12f));
+        label.setFont(new Font(MONO, Font.PLAIN, 12));
+        label.setForeground(LABEL);
         label.setOpaque(true);
-        label.setBackground(new Color(255, 255, 225));
+        label.setBackground(CANVAS);
         label.setBorder(BorderFactory.createCompoundBorder(
-                BorderFactory.createLineBorder(new Color(190, 190, 190)),
-                BorderFactory.createEmptyBorder(3, 6, 3, 6)));
+                BorderFactory.createLineBorder(HAIRLINE),
+                BorderFactory.createEmptyBorder(5, 9, 5, 9)));
         try {
             var at = code.modelToView2D(r.start());
-            Point p = new Point((int) at.getX(), (int) at.getMaxY() + 2);
+            Point p = new Point((int) at.getX() - 9, (int) at.getMaxY() + 4);
             SwingUtilities.convertPointToScreen(p, code);
             hint = PopupFactory.getSharedInstance().getPopup(code, label, p.x, p.y);
             hint.show();
@@ -392,8 +554,12 @@ public class Editor extends JFrame {
     void markDirty() { dirty = true; updateTitle(); }
 
     void updateTitle() {
-        String t = "jrun — " + (file != null ? file.getFileName() : "Untitled") + (dirty ? " ●" : "");
-        SwingUtilities.invokeLater(() -> setTitle(t));
+        String t = file != null ? file.getFileName().toString() : "Untitled";
+        boolean edited = dirty;
+        SwingUtilities.invokeLater(() -> {
+            setTitle(t);
+            getRootPane().putClientProperty("Window.documentModified", edited);
+        });
     }
 
     boolean confirmDiscard() {

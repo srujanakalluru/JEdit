@@ -5,6 +5,7 @@ import java.awt.*;
 import java.awt.event.*;
 import java.io.*;
 import java.nio.file.*;
+import java.security.MessageDigest;
 import java.util.*;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
@@ -13,6 +14,7 @@ import java.util.regex.*;
 public class Editor extends JFrame {
     static final String JRUN_HOME = System.getenv().getOrDefault("JRUN_HOME",
             System.getProperty("user.home") + "/.jrun");
+    static final String MVN  = JRUN_HOME + "/maven/bin/mvn";
     static final String JAVA = Path.of(System.getProperty("java.home"), "bin", "java").toString();
 
     private final JTextArea code   = new JTextArea();
@@ -114,8 +116,9 @@ public class Editor extends JFrame {
                 Path src  = tmpSrcDir.resolve(className + ".java");
                 Files.writeString(src, currentText);
 
+                String cp  = classpath(currentText);
                 tmpOut = Files.createTempDirectory("jedit-");
-                String main = Fixer.compile(src, tmpOut, "", this::importDialog, this::appendOut);
+                String main = Fixer.compile(src, tmpOut, cp, this::importDialog, this::appendOut);
 
                 String updated = Files.readString(src);
                 if (!updated.equals(currentText)) {
@@ -131,7 +134,8 @@ public class Editor extends JFrame {
                 if (main == null) { setStatus("Compile failed."); return; }
                 setStatus("Running " + main + "…");
 
-                Process proc = new ProcessBuilder(JAVA, "-cp", tmpOut.toString(), main)
+                Process proc = new ProcessBuilder(JAVA, "-cp",
+                        tmpOut + (cp.isEmpty() ? "" : File.pathSeparator + cp), main)
                         .redirectErrorStream(true).start();
                 try (var br = new BufferedReader(new InputStreamReader(proc.getInputStream()))) {
                     br.lines().forEach(l -> appendOut(l + "\n"));
@@ -151,6 +155,49 @@ public class Editor extends JFrame {
                 SwingUtilities.invokeLater(() -> runBtn.setEnabled(true));
             }
         });
+    }
+
+    String classpath(String src) throws Exception {
+        List<String> deps = src.lines()
+                .filter(l -> l.stripLeading().startsWith("//DEPS"))
+                .map(l -> l.replaceFirst("^\\s*//DEPS\\s*", ""))
+                .flatMap(l -> Arrays.stream(l.split("[,\\s]+")))
+                .filter(s -> !s.isEmpty() && s.contains(":"))
+                .sorted().distinct().toList();
+        if (deps.isEmpty()) return "";
+
+        String key = String.join("\n", deps);
+        String hex = HexFormat.of().formatHex(
+                MessageDigest.getInstance("SHA-256").digest(key.getBytes())).substring(0, 16);
+        Path cdir = Path.of(JRUN_HOME, "cache", "deps", hex);
+        Path cpf  = cdir.resolve("cp.txt");
+        if (Files.exists(cpf)) return Files.readString(cpf).trim();
+        Files.createDirectories(cdir);
+
+        var pom = new StringBuilder(
+                "<project xmlns=\"http://maven.apache.org/POM/4.0.0\">" +
+                "<modelVersion>4.0.0</modelVersion>" +
+                "<groupId>jrun</groupId><artifactId>s</artifactId><version>0</version>" +
+                "<dependencies>");
+        for (String dep : deps) {
+            String[] p = dep.split(":"); if (p.length < 3) throw new IllegalArgumentException("Bad dep: " + dep);
+            pom.append("<dependency><groupId>").append(p[0])
+               .append("</groupId><artifactId>").append(p[1])
+               .append("</artifactId><version>").append(p[2]).append("</version></dependency>");
+        }
+        pom.append("</dependencies></project>");
+        Files.writeString(cdir.resolve("pom.xml"), pom);
+
+        appendOut("Resolving dependencies…\n");
+        Process mvn = new ProcessBuilder(MVN, "-q", "-B", "-f",
+                cdir.resolve("pom.xml").toString(),
+                "dependency:build-classpath", "-Dmdep.outputFile=" + cpf)
+                .redirectErrorStream(true).start();
+        try (var br = new BufferedReader(new InputStreamReader(mvn.getInputStream()))) {
+            br.lines().forEach(l -> appendOut(l + "\n"));
+        }
+        if (mvn.waitFor() != 0) { Files.deleteIfExists(cpf); throw new RuntimeException("Maven failed"); }
+        return Files.readString(cpf).trim();
     }
 
     String importDialog(String name, List<String> cands) throws Exception {

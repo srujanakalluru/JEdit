@@ -172,6 +172,37 @@ public class Editor extends JFrame {
         });
     }
 
+    void ensureMaven() throws Exception {
+        if (Files.exists(Path.of(MVN))) return;
+        String url = "https://archive.apache.org/dist/maven/maven-3/3.9.11/binaries/apache-maven-3.9.11-bin.tar.gz";
+        Path tar = Path.of(JRUN_HOME, "maven.tar.gz");
+        Files.createDirectories(Path.of(JRUN_HOME));
+        appendOut("Downloading Maven 3.9.11…\n");
+        Process dl = new ProcessBuilder("curl", "-fsSL", "-o", tar.toString(), url)
+                .redirectErrorStream(true).start();
+        try (var br = new BufferedReader(new InputStreamReader(dl.getInputStream()))) {
+            br.lines().forEach(l -> appendOut(l + "\n"));
+        }
+        if (dl.waitFor() != 0) throw new RuntimeException("Maven download failed");
+        appendOut("Extracting Maven…\n");
+        Process ex = new ProcessBuilder("tar", "-xzf", tar.toString(), "-C", JRUN_HOME)
+                .redirectErrorStream(true).start();
+        try (var br = new BufferedReader(new InputStreamReader(ex.getInputStream()))) {
+            br.lines().forEach(l -> appendOut(l + "\n"));
+        }
+        if (ex.waitFor() != 0) throw new RuntimeException("Maven extraction failed");
+        try (var s = Files.list(Path.of(JRUN_HOME))) {
+            s.filter(p -> p.getFileName().toString().startsWith("apache-maven-"))
+             .findFirst().ifPresent(p -> {
+                 try { Files.move(p, Path.of(JRUN_HOME, "maven")); }
+                 catch (IOException e) { throw new UncheckedIOException(e); }
+             });
+        }
+        Files.deleteIfExists(tar);
+        Path.of(MVN).toFile().setExecutable(true);
+        appendOut("Maven ready.\n");
+    }
+
     String classpath(String src) throws Exception {
         List<String> deps = src.lines()
                 .filter(l -> l.stripLeading().startsWith("//DEPS"))
@@ -203,6 +234,7 @@ public class Editor extends JFrame {
         pom.append("</dependencies></project>");
         Files.writeString(cdir.resolve("pom.xml"), pom);
 
+        ensureMaven();
         appendOut("Resolving dependencies…\n");
         Process mvn = new ProcessBuilder(MVN, "-q", "-B", "-f",
                 cdir.resolve("pom.xml").toString(),

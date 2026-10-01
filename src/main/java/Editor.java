@@ -88,6 +88,9 @@ public class Editor extends JFrame {
         bind(KeyEvent.VK_R, mod, e -> doRun());
         bind(KeyEvent.VK_Z, mod, e -> { if (undo.canUndo()) undo.undo(); });
         bind(KeyEvent.VK_Z, mod | KeyEvent.SHIFT_DOWN_MASK, e -> { if (undo.canRedo()) undo.redo(); });
+        bind(KeyEvent.VK_SLASH,      mod, e -> toggleComment());
+        bind(KeyEvent.VK_D,          mod, e -> duplicateLine());
+        bind(KeyEvent.VK_BACK_SPACE, mod, e -> deleteLine());
     }
 
     void bind(int key, int mod, ActionListener a) {
@@ -319,6 +322,42 @@ public class Editor extends JFrame {
         if (!dirty) return true;
         return JOptionPane.showConfirmDialog(this, "Discard unsaved changes?",
                 "Unsaved Changes", JOptionPane.YES_NO_OPTION) == JOptionPane.YES_OPTION;
+    }
+
+    void toggleComment() {
+        String t = code.getText();
+        int start = t.lastIndexOf('\n', code.getCaretPosition() - 1) + 1;
+        int end   = t.indexOf('\n', code.getCaretPosition());
+        if (end < 0) end = t.length();
+        String line = t.substring(start, end);
+        String replaced = line.stripLeading().startsWith("//")
+                ? line.replaceFirst("//\\s?", "")
+                : "//" + line;
+        code.select(start, end);
+        code.replaceSelection(replaced);
+        code.setCaretPosition(Math.min(start + replaced.length(), code.getText().length()));
+    }
+
+    void duplicateLine() {
+        String t = code.getText();
+        int pos   = code.getCaretPosition();
+        int start = t.lastIndexOf('\n', pos - 1) + 1;
+        int end   = t.indexOf('\n', pos);
+        if (end < 0) end = t.length();
+        String line = t.substring(start, end);
+        code.select(end, end);
+        code.replaceSelection("\n" + line);
+        code.setCaretPosition(end + 1 + line.length());
+    }
+
+    void deleteLine() {
+        String t = code.getText();
+        int pos   = code.getCaretPosition();
+        int start = t.lastIndexOf('\n', pos - 1) + 1;
+        int end   = t.indexOf('\n', pos);
+        if (end < 0) { code.select(start > 0 ? start - 1 : 0, t.length()); }
+        else          { code.select(start, end + 1); }
+        code.replaceSelection("");
     }
 
     void maybeQuit() { if (confirmDiscard()) System.exit(0); }

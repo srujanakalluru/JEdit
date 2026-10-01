@@ -18,6 +18,14 @@
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
   </properties>
 
+  <dependencies>
+    <dependency>
+      <groupId>com.google.googlejavaformat</groupId>
+      <artifactId>google-java-format</artifactId>
+      <version>1.36.1</version>
+    </dependency>
+  </dependencies>
+
   <build>
     <sourceDirectory>src/main/java</sourceDirectory>
 
@@ -36,6 +44,9 @@
               <transformers>
                 <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
                   <mainClass>Editor</mainClass>
+                  <manifestEntries>
+                    <Add-Exports>jdk.compiler/com.sun.tools.javac.api jdk.compiler/com.sun.tools.javac.code jdk.compiler/com.sun.tools.javac.file jdk.compiler/com.sun.tools.javac.parser jdk.compiler/com.sun.tools.javac.tree jdk.compiler/com.sun.tools.javac.util</Add-Exports>
+                  </manifestEntries>
                 </transformer>
               </transformers>
             </configuration>

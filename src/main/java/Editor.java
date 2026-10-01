@@ -1,8 +1,12 @@
+import com.google.googlejavaformat.java.Formatter;
+import com.google.googlejavaformat.java.FormatterException;
+import com.google.googlejavaformat.java.JavaFormatterOptions;
 import javax.swing.*;
 import javax.swing.event.*;
 import javax.swing.filechooser.*;
 import javax.swing.plaf.basic.BasicSplitPaneDivider;
 import javax.swing.plaf.basic.BasicSplitPaneUI;
+import javax.swing.text.AbstractDocument;
 import javax.swing.text.BadLocationException;
 import javax.swing.text.Highlighter;
 import javax.swing.text.JTextComponent;
@@ -184,6 +188,7 @@ public class Editor extends JFrame {
         bind(KeyEvent.VK_SLASH,      mod, e -> toggleComment());
         bind(KeyEvent.VK_D,          mod, e -> duplicateLine());
         bind(KeyEvent.VK_BACK_SPACE, mod, e -> deleteLine());
+        bind(KeyEvent.VK_L, mod | InputEvent.ALT_DOWN_MASK, e -> reformat());
     }
 
     void bind(int key, int mod, ActionListener a) {
@@ -604,6 +609,49 @@ public class Editor extends JFrame {
         if (end < 0) { code.select(start > 0 ? start - 1 : 0, t.length()); }
         else          { code.select(start, end + 1); }
         code.replaceSelection("");
+    }
+
+    // AOSP style is google-java-format's 4-space variant, matching IntelliJ's default layout.
+    static final Formatter FORMATTER =
+            new Formatter(JavaFormatterOptions.builder().style(JavaFormatterOptions.Style.AOSP).build());
+
+    void reformat() {
+        String src = code.getText();
+        String formatted;
+        try {
+            formatted = FORMATTER.formatSource(src);
+        } catch (FormatterException ex) {
+            setStatus("Can't format: " + ex.getMessage());
+            return;
+        }
+        if (formatted.equals(src)) { setStatus("Already formatted."); return; }
+        int line = 0;
+        try { line = code.getLineOfOffset(code.getCaretPosition()); } catch (BadLocationException ignored) {}
+        replaceAll(formatted);
+        try {
+            int start = code.getLineStartOffset(Math.min(line, code.getLineCount() - 1));
+            String rest = code.getText().substring(start);
+            code.setCaretPosition(start + (rest.length() - rest.stripLeading().length()));
+        } catch (BadLocationException ignored) {}
+        setStatus("Reformatted.");
+    }
+
+    // Swap the whole buffer as one undoable step; a plain replace would take two Cmd+Z presses.
+    void replaceAll(String text) {
+        AbstractDocument doc = (AbstractDocument) code.getDocument();
+        CompoundEdit edit = new CompoundEdit();
+        UndoableEditListener collect = e -> edit.addEdit(e.getEdit());
+        doc.removeUndoableEditListener(undo);
+        doc.addUndoableEditListener(collect);
+        try {
+            doc.replace(0, doc.getLength(), text, null);
+        } catch (BadLocationException ignored) {
+        } finally {
+            doc.removeUndoableEditListener(collect);
+            doc.addUndoableEditListener(undo);
+        }
+        edit.end();
+        undo.addEdit(edit);
     }
 
     void maybeQuit() {

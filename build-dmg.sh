@@ -17,6 +17,12 @@ jlink \
   --strip-debug --no-man-pages --no-header-files \
   --output target/runtime
 
+# google-java-format drives javac's internal parser; jpackage's launcher ignores the jar manifest.
+EXPORTS=()
+for pkg in api code file parser tree util; do
+  EXPORTS+=(--java-options "--add-exports=jdk.compiler/com.sun.tools.javac.$pkg=ALL-UNNAMED")
+done
+
 echo "==> Running jpackage…"
 jpackage \
   --type dmg \
@@ -29,6 +35,7 @@ jpackage \
   --main-class Editor \
   --dest target/jpackage-out \
   --java-options "-Dapple.awt.application.name=JEdit" \
+  "${EXPORTS[@]}" \
   --runtime-image target/runtime \
   --mac-package-identifier io.jrun.jedit \
   --mac-package-name JEdit

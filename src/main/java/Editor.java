@@ -1,11 +1,15 @@
 import javax.swing.*;
 import javax.swing.event.*;
 import javax.swing.filechooser.*;
+import javax.swing.text.BadLocationException;
+import javax.swing.text.DefaultHighlighter;
+import javax.swing.text.Highlighter;
 import java.awt.*;
 import java.awt.event.*;
 import java.io.*;
 import java.nio.file.*;
 import java.util.*;
+import java.util.List;
 import java.util.regex.*;
 
 public class Editor extends JFrame {
@@ -19,6 +23,14 @@ public class Editor extends JFrame {
     private final JButton   runBtn = new JButton("▶ Run");
     private Path    file;
     private boolean dirty;
+
+    private final Imports imports = new Imports();
+    private final javax.swing.Timer importTimer = new javax.swing.Timer(400, e -> checkImports());
+    private final Highlighter.HighlightPainter unresolvedPaint =
+            new DefaultHighlighter.DefaultHighlightPainter(new Color(255, 214, 214));
+    private final List<Object> unresolvedTags = new ArrayList<>();
+    private List<Imports.Ref> refs = List.of();
+    private Popup hint;
 
     public static void main(String[] args) {
         System.setProperty("apple.awt.application.name", "jrun");
@@ -37,6 +49,11 @@ public class Editor extends JFrame {
             public void windowClosing(WindowEvent e) { maybeQuit(); }
         });
         buildUI();
+        importTimer.setRepeats(false);
+        Thread.ofVirtual().start(() -> {
+            try { imports.load(""); } catch (IOException ignored) {}
+            SwingUtilities.invokeLater(this::checkImports);
+        });
         if (p != null) openFile(p); else newFile();
         setSize(940, 700);
         setLocationRelativeTo(null);
@@ -46,9 +63,17 @@ public class Editor extends JFrame {
         code.setFont(new Font(Font.MONOSPACED, Font.PLAIN, 14));
         code.setTabSize(4);
         code.getDocument().addDocumentListener(new DocumentListener() {
-            public void insertUpdate(DocumentEvent e) { markDirty(); }
-            public void removeUpdate(DocumentEvent e) { markDirty(); }
+            public void insertUpdate(DocumentEvent e) { markDirty(); scheduleImportCheck(); }
+            public void removeUpdate(DocumentEvent e) { markDirty(); scheduleImportCheck(); }
             public void changedUpdate(DocumentEvent e) {}
+        });
+        code.addCaretListener(e -> scheduleImportCheck());
+        code.addFocusListener(new FocusAdapter() {
+            public void focusLost(FocusEvent e) { hideHint(); }
+        });
+        code.getInputMap().put(KeyStroke.getKeyStroke(KeyEvent.VK_ENTER, InputEvent.ALT_DOWN_MASK), "import");
+        code.getActionMap().put("import", new AbstractAction() {
+            public void actionPerformed(ActionEvent e) { showImportPopup(); }
         });
 
         output.setFont(new Font(Font.MONOSPACED, Font.PLAIN, 12));
@@ -137,6 +162,79 @@ public class Editor extends JFrame {
                 SwingUtilities.invokeLater(() -> runBtn.setEnabled(true));
             }
         });
+    }
+
+    void scheduleImportCheck() {
+        hideHint();
+        importTimer.restart();
+    }
+
+    void checkImports() {
+        refs = imports.unresolved(code.getText());
+        Highlighter h = code.getHighlighter();
+        unresolvedTags.forEach(h::removeHighlight);
+        unresolvedTags.clear();
+        for (var r : refs) {
+            try { unresolvedTags.add(h.addHighlight(r.start(), r.start() + r.name().length(), unresolvedPaint)); }
+            catch (BadLocationException ignored) {}
+        }
+        int caret = code.getCaretPosition();
+        refs.stream().filter(r -> touches(r, caret)).findFirst().ifPresent(this::showHint);
+    }
+
+    void showHint(Imports.Ref r) {
+        if (!code.isShowing()) return;
+        List<String> shown = r.cands().subList(0, Math.min(3, r.cands().size()));
+        String text = String.join("  |  ", shown) + (r.cands().size() > 3 ? "  |  …" : "") + "    ⌥↵";
+        JLabel label = new JLabel(text);
+        label.setFont(code.getFont().deriveFont(12f));
+        label.setOpaque(true);
+        label.setBackground(new Color(255, 255, 225));
+        label.setBorder(BorderFactory.createCompoundBorder(
+                BorderFactory.createLineBorder(new Color(190, 190, 190)),
+                BorderFactory.createEmptyBorder(3, 6, 3, 6)));
+        try {
+            var at = code.modelToView2D(r.start());
+            Point p = new Point((int) at.getX(), (int) at.getMaxY() + 2);
+            SwingUtilities.convertPointToScreen(p, code);
+            hint = PopupFactory.getSharedInstance().getPopup(code, label, p.x, p.y);
+            hint.show();
+        } catch (BadLocationException ignored) {}
+    }
+
+    void hideHint() {
+        if (hint != null) { hint.hide(); hint = null; }
+    }
+
+    boolean touches(Imports.Ref r, int pos) {
+        return pos >= r.start() && pos <= r.start() + r.name().length();
+    }
+
+    void addImport(String fq) {
+        String src = code.getText();
+        if (Pattern.compile("^\\s*import\\s+" + Pattern.quote(fq) + "\\s*;", Pattern.MULTILINE).matcher(src).find()) return;
+        try { code.getDocument().insertString(Imports.insertAt(src), Imports.importLine(src, fq), null); }
+        catch (BadLocationException ignored) {}
+    }
+
+    void showImportPopup() {
+        hideHint();
+        refs = imports.unresolved(code.getText());
+        int caret = code.getCaretPosition();
+        Imports.Ref r = refs.stream().filter(x -> touches(x, caret)).findFirst()
+                .orElse(refs.isEmpty() ? null : refs.get(0));
+        if (r == null) { setStatus("Nothing to import."); return; }
+        JPopupMenu menu = new JPopupMenu();
+        for (String fq : r.cands().subList(0, Math.min(10, r.cands().size()))) {
+            JMenuItem item = new JMenuItem(fq);
+            item.addActionListener(e -> { addImport(fq); checkImports(); });
+            menu.add(item);
+        }
+        try {
+            var at = code.modelToView2D(r.start());
+            menu.show(code, (int) at.getX(), (int) at.getMaxY());
+            MenuSelectionManager.defaultManager().setSelectedPath(new MenuElement[]{menu, (MenuElement) menu.getComponent(0)});
+        } catch (BadLocationException ignored) {}
     }
 
     void newFile() {

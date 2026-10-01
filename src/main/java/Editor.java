@@ -5,10 +5,13 @@ import java.awt.*;
 import java.awt.event.*;
 import java.io.*;
 import java.nio.file.*;
+import java.util.*;
+import java.util.regex.*;
 
 public class Editor extends JFrame {
     static final String JRUN_HOME = System.getenv().getOrDefault("JRUN_HOME",
             System.getProperty("user.home") + "/.jrun");
+    static final String JAVA = Path.of(System.getProperty("java.home"), "bin", "java").toString();
 
     private final JTextArea code   = new JTextArea();
     private final JTextArea output = new JTextArea();
@@ -65,7 +68,7 @@ public class Editor extends JFrame {
         bar.add(btn("Save",  e -> save()));
         bar.addSeparator();
         runBtn.setFont(runBtn.getFont().deriveFont(Font.BOLD));
-        runBtn.addActionListener(e -> appendOut("(run not yet implemented)\n"));
+        runBtn.addActionListener(e -> doRun());
         bar.add(runBtn);
 
         status.setBorder(BorderFactory.createEmptyBorder(2, 6, 2, 0));
@@ -75,6 +78,7 @@ public class Editor extends JFrame {
 
         int mod = Toolkit.getDefaultToolkit().getMenuShortcutKeyMaskEx();
         bind(KeyEvent.VK_S, mod, e -> save());
+        bind(KeyEvent.VK_R, mod, e -> doRun());
     }
 
     void bind(int key, int mod, ActionListener a) {
@@ -84,6 +88,55 @@ public class Editor extends JFrame {
 
     JButton btn(String label, ActionListener a) {
         JButton b = new JButton(label); b.addActionListener(a); return b;
+    }
+
+    static String extractClassName(String src) {
+        Matcher m = Pattern.compile("\\bpublic\\s+class\\s+(\\w+)").matcher(src);
+        if (m.find()) return m.group(1);
+        m = Pattern.compile("\\bclass\\s+(\\w+)").matcher(src);
+        if (m.find()) return m.group(1);
+        return "Main";
+    }
+
+    void doRun() {
+        String currentText = code.getText();
+        output.setText("");
+        setStatus("Compiling\u2026");
+        runBtn.setEnabled(false);
+
+        Thread.ofVirtual().start(() -> {
+            Path tmpSrcDir = null, tmpOut = null;
+            try {
+                String className = extractClassName(currentText);
+                tmpSrcDir = Files.createTempDirectory("jedit-src-");
+                Path src  = tmpSrcDir.resolve(className + ".java");
+                Files.writeString(src, currentText);
+
+                tmpOut = Files.createTempDirectory("jedit-");
+                String main = Fixer.compile(src, tmpOut, "", this::appendOut);
+                if (main == null) { setStatus("Compile failed."); return; }
+                setStatus("Running " + main + "\u2026");
+
+                Process proc = new ProcessBuilder(JAVA, "-cp", tmpOut.toString(), main)
+                        .redirectErrorStream(true).start();
+                try (var br = new BufferedReader(new InputStreamReader(proc.getInputStream()))) {
+                    br.lines().forEach(l -> appendOut(l + "\n"));
+                }
+                int exit = proc.waitFor();
+                setStatus(exit == 0 ? "Done (exit 0)." : "Exited with code " + exit + ".");
+            } catch (Exception ex) {
+                appendOut("[Error] " + ex.getMessage() + "\n");
+                setStatus("Error.");
+            } finally {
+                for (Path dir : new Path[]{tmpOut, tmpSrcDir}) {
+                    if (dir == null) continue;
+                    try (var w = Files.walk(dir)) {
+                        w.sorted(Comparator.reverseOrder()).map(Path::toFile).forEach(File::delete);
+                    } catch (Exception ignored) {}
+                }
+                SwingUtilities.invokeLater(() -> runBtn.setEnabled(true));
+            }
+        });
     }
 
     void newFile() {

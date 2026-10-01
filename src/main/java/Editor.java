@@ -58,7 +58,15 @@ public class Editor extends JFrame {
             try { imports.load(""); } catch (IOException ignored) {}
             SwingUtilities.invokeLater(this::checkImports);
         });
-        if (p != null) openFile(p); else newFile();
+        Path autosave = Path.of(JRUN_HOME, "autosave.java");
+        if (p != null) {
+            openFile(p);
+        } else if (Files.exists(autosave)) {
+            try { code.setText(Files.readString(autosave)); Files.deleteIfExists(autosave); dirty = true; updateTitle(); }
+            catch (IOException ignored) { newFile(); }
+        } else {
+            newFile();
+        }
         setSize(940, 700);
         setLocationRelativeTo(null);
     }
@@ -430,6 +438,12 @@ public class Editor extends JFrame {
         code.replaceSelection("");
     }
 
-    void maybeQuit() { if (confirmDiscard()) System.exit(0); }
+    void maybeQuit() {
+        if (confirmDiscard()) {
+            try { Files.createDirectories(Path.of(JRUN_HOME)); Files.writeString(Path.of(JRUN_HOME, "autosave.java"), code.getText()); }
+            catch (IOException ignored) {}
+            System.exit(0);
+        }
+    }
     void showErr(String msg) { JOptionPane.showMessageDialog(this, msg, "Error", JOptionPane.ERROR_MESSAGE); }
 }

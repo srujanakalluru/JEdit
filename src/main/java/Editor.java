@@ -55,10 +55,12 @@ public class Editor extends JFrame {
     };
     private final JTextArea output = new JTextArea();
     private final JLabel    status = new JLabel("Ready");
-    private final JButton       runBtn = new ToolButton("▶  Run", true, e -> doRun());
-    private final UndoManager   undo   = new UndoManager();
+    private final JButton       runBtn  = new ToolButton("▶  Run", true, false, e -> doRun());
+    private final JButton       stopBtn = new ToolButton("■  Stop", true, true,  e -> doStop());
+    private final UndoManager   undo    = new UndoManager();
     private Path    file;
     private boolean dirty;
+    private volatile Process runningProc;
 
     private final Imports imports = new Imports();
     private final javax.swing.Timer importTimer = new javax.swing.Timer(400, e -> checkImports());
@@ -160,14 +162,20 @@ public class Editor extends JFrame {
         left.add(tool("Open…", null, e -> { if (confirmDiscard()) chooseOpen(); }));
         left.add(tool("Save", "⌘S", e -> save()));
         runBtn.setToolTipText("Run  ⌘R");
+        stopBtn.setToolTipText("Stop running process");
+        stopBtn.setVisible(false);
 
         JPanel bar = new JPanel(new BorderLayout());
         bar.setBackground(CHROME);
         bar.setBorder(BorderFactory.createCompoundBorder(
                 BorderFactory.createMatteBorder(0, 0, 1, 0, HAIRLINE),
                 BorderFactory.createEmptyBorder(MAC ? 11 : 8, MAC ? 78 : 10, 9, 12)));
+        JPanel right = new JPanel(new FlowLayout(FlowLayout.RIGHT, 4, 0));
+        right.setOpaque(false);
+        right.add(runBtn);
+        right.add(stopBtn);
         bar.add(left, BorderLayout.WEST);
-        bar.add(runBtn, BorderLayout.EAST);
+        bar.add(right, BorderLayout.EAST);
 
         status.setFont(status.getFont().deriveFont(11f));
         status.setForeground(SECONDARY);
@@ -197,7 +205,7 @@ public class Editor extends JFrame {
     }
 
     JButton tool(String label, String shortcut, ActionListener a) {
-        JButton b = new ToolButton(label, false, a);
+        JButton b = new ToolButton(label, false, false, a);
         if (shortcut != null) b.setToolTipText(label + "  " + shortcut);
         return b;
     }
@@ -227,10 +235,12 @@ public class Editor extends JFrame {
 
     static final class ToolButton extends JButton {
         private final boolean primary;
+        private final boolean danger;
 
-        ToolButton(String label, boolean primary, ActionListener a) {
+        ToolButton(String label, boolean primary, boolean danger, ActionListener a) {
             super(label);
             this.primary = primary;
+            this.danger  = danger;
             addActionListener(a);
             setContentAreaFilled(false);
             setBorderPainted(false);
@@ -244,9 +254,22 @@ public class Editor extends JFrame {
 
         @Override protected void paintComponent(Graphics g) {
             ButtonModel m = getModel();
-            Color fill = primary
-                    ? !isEnabled() ? new Color(0x99C7FF) : m.isPressed() ? new Color(0x0062CC) : m.isRollover() ? new Color(0x0A84FF) : ACCENT
-                    : m.isPressed() ? new Color(0xDCDCE1) : m.isRollover() ? new Color(0xE8E8ED) : null;
+            Color fill;
+            if (danger) {
+                if (!isEnabled())       fill = new Color(0xFF9D99);
+                else if (m.isPressed()) fill = new Color(0xCC2F26);
+                else if (m.isRollover()) fill = new Color(0xFF453A);
+                else                    fill = Editor.ERROR;
+            } else if (primary) {
+                if (!isEnabled())       fill = new Color(0x99C7FF);
+                else if (m.isPressed()) fill = new Color(0x0062CC);
+                else if (m.isRollover()) fill = new Color(0x0A84FF);
+                else                    fill = Editor.ACCENT;
+            } else {
+                if (m.isPressed())      fill = new Color(0xDCDCE1);
+                else if (m.isRollover()) fill = new Color(0xE8E8ED);
+                else                    fill = null;
+            }
             if (fill != null) {
                 Graphics2D g2 = (Graphics2D) g.create();
                 g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
@@ -305,6 +328,11 @@ public class Editor extends JFrame {
         return "Main";
     }
 
+    void doStop() {
+        Process p = runningProc;
+        if (p != null) p.destroyForcibly();
+    }
+
     void doRun() {
         String currentText = code.getText();
         output.setText("");
@@ -332,6 +360,8 @@ public class Editor extends JFrame {
                 Process proc = new ProcessBuilder(JAVA, "-cp",
                         tmpOut + (cp.isEmpty() ? "" : File.pathSeparator + cp), main)
                         .redirectErrorStream(true).start();
+                runningProc = proc;
+                SwingUtilities.invokeLater(() -> { runBtn.setVisible(false); stopBtn.setVisible(true); });
                 try (var br = new BufferedReader(new InputStreamReader(proc.getInputStream()))) {
                     br.lines().forEach(l -> appendOut(l + "\n"));
                 }
@@ -347,7 +377,8 @@ public class Editor extends JFrame {
                         w.sorted(Comparator.reverseOrder()).map(Path::toFile).forEach(File::delete);
                     } catch (Exception ignored) {}
                 }
-                SwingUtilities.invokeLater(() -> runBtn.setEnabled(true));
+                runningProc = null;
+                SwingUtilities.invokeLater(() -> { stopBtn.setVisible(false); runBtn.setVisible(true); runBtn.setEnabled(true); });
             }
         });
     }
